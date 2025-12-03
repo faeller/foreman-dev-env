@@ -1,0 +1,58 @@
+# foreman from source - supports both dev and production modes
+# builds from git repo with full asset pipeline support
+ARG FOREMAN_VERSION=develop
+ARG RUBY_VERSION=3.1
+FROM rockylinux:9
+
+ARG FOREMAN_VERSION
+ARG RUBY_VERSION
+
+# install system dependencies including irb for dev mode
+RUN dnf -y install epel-release && \
+    dnf -y config-manager --set-enabled crb && \
+    dnf -y module enable ruby:${RUBY_VERSION} nodejs:20 postgresql:15 && \
+    dnf -y install \
+        ruby ruby-devel rubygem-bundler rubygem-irb \
+        nodejs npm \
+        postgresql postgresql-devel libpq-devel \
+        git make gcc gcc-c++ redhat-rpm-config \
+        libxml2-devel libxslt-devel \
+        libcurl-devel openssl-devel \
+        libyaml libyaml-devel \
+        systemd-devel libvirt-devel \
+        hostname procps-ng && \
+    dnf clean all
+
+# create foreman user and gem directory
+RUN groupadd -r foreman && useradd -r -g foreman -d /home/foreman foreman && \
+    mkdir -p /opt/foreman-gems && chown foreman:foreman /opt/foreman-gems
+
+# clone foreman into home directory
+RUN git clone --depth 1 --branch ${FOREMAN_VERSION} https://github.com/theforeman/foreman.git /home/foreman && \
+    chown -R foreman:foreman /home/foreman
+
+WORKDIR /home/foreman
+
+USER foreman
+
+# setup bundler - install gems in vendor/ (relative path)
+# include development gems for RAILS_ENV=development support
+ENV BUNDLE_PATH=vendor \
+    BUNDLE_JOBS=4
+RUN bundle config set --local with 'development' && \
+    bundle install
+
+RUN npm install
+
+# create plugin directories and add local bundler.d loader
+RUN mkdir -p /home/foreman/plugins /home/foreman/bundler.d/local && \
+    echo 'Dir["/home/foreman/bundler.d/local/*.rb"].each { |f| instance_eval(Bundler.read_file(f)) }' > /home/foreman/bundler.d/local_loader.rb
+
+EXPOSE 3000
+
+# default to dev mode
+ENV RAILS_ENV=development \
+    RAILS_LOG_TO_STDOUT=true \
+    DATABASE_URL=postgres://foreman:foreman@db:5432/foreman
+
+CMD ["bundle", "exec", "rails", "server", "-b", "0.0.0.0"]

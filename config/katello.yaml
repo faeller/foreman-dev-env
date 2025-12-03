@@ -1,0 +1,10 @@
+# katello config for docker dev environment
+:katello:
+  :candlepin:
+    :url: http://candlepin:8080/candlepin
+    :oauth_key: katello
+    :oauth_secret: katello_oauth_secret
+    :ca_cert_file:
+  :pulp:
+    :url: http://pulp-api:24817
+    :content_url: http://pulp-content:24816/pulp/content

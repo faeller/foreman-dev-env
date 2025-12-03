@@ -1,0 +1,5 @@
+.env
+md_docs/
+config/candlepin/certs/
+config/pulp-certs/
+*.log

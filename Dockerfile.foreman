@@ -1,0 +1,15 @@
+# foreman with plugin development support
+# extends official image to allow installing additional gems
+ARG FOREMAN_VERSION=3.16-stable
+FROM quay.io/foreman/foreman:${FOREMAN_VERSION}
+
+# copy plugin gemfile links (bundler.d files)
+COPY bundler.d/*.local.rb /home/foreman/bundler.d/
+
+# install terser for asset compilation (needed for plugins)
+USER root
+RUN dnf install -y nodejs npm && npm install -g terser && dnf clean all
+RUN chown -R foreman:foreman /home/foreman/vendor
+USER foreman
+
+# install gems will happen at runtime when plugins are mounted

@@ -1,0 +1,33 @@
+# katello mode override
+# usage: docker compose -f docker-compose.yml -f docker-compose.katello.yml --profile katello up -d
+#
+# this override:
+# - uses the self-contained katello dockerfile
+# - removes foreman_vendor volume (image has pre-bundled gems)
+# - removes external plugins mount (image has all needed plugins)
+
+services:
+  foreman:
+    build:
+      context: .
+      dockerfile: Dockerfile.foreman-katello
+    image: foreman-katello-dev:latest
+    # entrypoint in Dockerfile handles first-run setup (migrations, seed, webpack)
+    environment:
+      RAILS_ENV: development
+    volumes:
+      # minimal mounts - don't overwrite bundled gems/webpack
+      - foreman_data:/home/foreman/public/assets
+      - ./config/katello.yaml:/home/foreman/config/settings.plugins.d/katello.yaml:ro
+
+  orchestrator:
+    image: foreman-katello-dev:latest
+    volumes:
+      - foreman_data:/home/foreman/public/assets
+      - ./config/katello.yaml:/home/foreman/config/settings.plugins.d/katello.yaml:ro
+
+  worker:
+    image: foreman-katello-dev:latest
+    volumes:
+      - foreman_data:/home/foreman/public/assets
+      - ./config/katello.yaml:/home/foreman/config/settings.plugins.d/katello.yaml:ro

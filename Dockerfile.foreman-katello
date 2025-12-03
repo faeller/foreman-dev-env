@@ -1,0 +1,73 @@
+# foreman + katello from source
+ARG FOREMAN_VERSION=3.16-stable
+ARG KATELLO_VERSION=KATELLO-4.18
+ARG RUBY_VERSION=3.1
+FROM rockylinux:9
+
+ARG FOREMAN_VERSION
+ARG KATELLO_VERSION
+ARG RUBY_VERSION
+
+# system dependencies (katello needs qpid-proton for pulp communication)
+RUN dnf -y install epel-release && \
+    dnf -y config-manager --set-enabled crb && \
+    dnf -y module enable ruby:${RUBY_VERSION} nodejs:20 postgresql:15 && \
+    dnf -y install \
+        ruby ruby-devel rubygem-bundler rubygem-irb \
+        nodejs npm \
+        postgresql postgresql-devel libpq-devel \
+        git make gcc gcc-c++ redhat-rpm-config \
+        libxml2-devel libxslt-devel \
+        libcurl-devel openssl-devel \
+        libyaml libyaml-devel \
+        systemd-devel libvirt-devel \
+        qpid-proton-c-devel \
+        hostname procps-ng && \
+    dnf clean all
+
+RUN groupadd -r foreman && useradd -r -g foreman -d /home/foreman foreman && \
+    mkdir -p /opt/foreman-gems && chown foreman:foreman /opt/foreman-gems
+
+# clone foreman
+RUN git clone --depth 1 --branch ${FOREMAN_VERSION} https://github.com/theforeman/foreman.git /home/foreman && \
+    chown -R foreman:foreman /home/foreman
+
+# clone katello into plugins
+RUN git clone --depth 1 --branch ${KATELLO_VERSION} https://github.com/Katello/katello.git /home/foreman/plugins/katello && \
+    chown -R foreman:foreman /home/foreman/plugins
+
+WORKDIR /home/foreman
+
+# add katello gem reference
+RUN echo "gem 'katello', path: '/home/foreman/plugins/katello'" > /home/foreman/bundler.d/katello.local.rb && \
+    chown foreman:foreman /home/foreman/bundler.d/katello.local.rb
+
+USER foreman
+
+ENV BUNDLE_PATH=vendor \
+    BUNDLE_JOBS=4
+RUN bundle config set --local with 'development' && \
+    bundle install
+
+RUN npm install
+
+RUN bundle exec rake webpack:compile
+
+# plugin loader for additional plugins
+RUN mkdir -p /home/foreman/bundler.d/local && \
+    echo 'Dir["/home/foreman/bundler.d/local/*.rb"].each { |f| instance_eval(Bundler.read_file(f)) }' > /home/foreman/bundler.d/local_loader.rb
+
+# entrypoint handles db migrations, seed, webpack on first run
+COPY --chown=foreman:foreman scripts/katello-entrypoint.sh /entrypoint.sh
+USER root
+RUN chmod +x /entrypoint.sh
+USER foreman
+
+EXPOSE 3000
+
+ENV RAILS_ENV=development \
+    RAILS_LOG_TO_STDOUT=true \
+    DATABASE_URL=postgres://foreman:foreman@db:5432/foreman
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["bundle", "exec", "rails", "server", "-b", "0.0.0.0"]

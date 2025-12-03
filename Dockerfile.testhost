@@ -1,0 +1,68 @@
+# test host container - simulates a managed host for foreman provisioning/management
+# uses supervisor instead of systemd for better container compatibility
+FROM rockylinux:9
+
+# install ssh and common tools foreman expects on managed hosts
+RUN dnf -y install --allowerasing \
+    openssh-server \
+    openssh-clients \
+    sudo \
+    curl \
+    wget \
+    hostname \
+    iproute \
+    net-tools \
+    procps-ng \
+    which \
+    vim-minimal \
+    python3-pip \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+# install supervisor for process management
+RUN pip3 install supervisor
+
+# setup ssh
+RUN ssh-keygen -A && \
+    mkdir -p /run/sshd && \
+    sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config && \
+    sed -i 's/#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+
+# create foreman user with sudo
+RUN useradd -m -s /bin/bash foreman && \
+    echo "foreman:foreman" | chpasswd && \
+    echo "root:changeme" | chpasswd && \
+    echo "foreman ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/foreman
+
+# registration script
+COPY testhost-entrypoint.sh /usr/local/bin/foreman-register.sh
+RUN chmod +x /usr/local/bin/foreman-register.sh
+
+# supervisor config
+RUN mkdir -p /etc/supervisor/conf.d
+COPY <<'EOF' /etc/supervisor/supervisord.conf
+[supervisord]
+nodaemon=true
+logfile=/var/log/supervisord.log
+pidfile=/var/run/supervisord.pid
+user=root
+
+[program:sshd]
+command=/usr/sbin/sshd -D
+autostart=true
+autorestart=true
+priority=10
+
+[program:foreman-register]
+command=/usr/local/bin/foreman-register.sh
+autostart=true
+autorestart=false
+startsecs=0
+priority=20
+stdout_logfile=/var/log/foreman-register.log
+stderr_logfile=/var/log/foreman-register.log
+EOF
+
+EXPOSE 22
+
+CMD ["/usr/local/bin/supervisord", "-c", "/etc/supervisor/supervisord.conf"]

@@ -1,0 +1,235 @@
+# foreman dev environment
+# usage:
+#   ./scripts/setup.sh                    # production mode (official images)
+#   ./scripts/setup.sh --source           # development mode (from git)
+#   docker compose --profile katello up   # with katello
+#   docker compose --profile testhosts up # with test hosts
+
+x-foreman-env: &foreman-env
+  RAILS_ENV: ${RAILS_ENV:-production}
+  BUNDLE_PATH: vendor
+  DATABASE_URL: postgres://foreman:foreman@db:5432/foreman
+  REDIS_URL: redis://redis:6379/1
+  FOREMAN_RAILS_CACHE_STORE_TYPE: redis
+  FOREMAN_RAILS_CACHE_STORE_URLS: redis://redis:6379/0
+  DYNFLOW_REDIS_URL: redis://redis:6379/1
+  SECRET_KEY_BASE: ${SECRET_KEY_BASE:-changeme_in_production}
+
+x-foreman-volumes: &foreman-volumes
+  - foreman_data:/home/foreman/public/assets
+  - ${PLUGINS_PATH:-../foreman-plugins}:/home/foreman/plugins/external:cached
+  - ./bundler.d:/home/foreman/bundler.d/local:ro
+  - foreman_vendor:/home/foreman/vendor
+
+x-foreman-depends: &foreman-depends
+  db:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: foreman
+      POSTGRES_PASSWORD: foreman
+      POSTGRES_DB: foreman
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./config/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U foreman"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  foreman:
+    build:
+      context: .
+      dockerfile: ${FOREMAN_DOCKERFILE:-Dockerfile.foreman}
+      args:
+        FOREMAN_VERSION: ${FOREMAN_VERSION:-3.16-stable}
+    image: foreman-dev:${FOREMAN_VERSION:-3.16-stable}
+    command: bash -c "rm -f tmp/pids/server.pid && bundle exec rails server -b 0.0.0.0 -p 3000"
+    depends_on: *foreman-depends
+    ports:
+      - "3000:3000"
+      - "3808:3808"
+    environment:
+      <<: *foreman-env
+      RAILS_SERVE_STATIC_FILES: "true"
+      FOREMAN_FQDN: foreman.local
+      FOREMAN_DOMAIN: local
+    volumes:
+      - foreman_data:/home/foreman/public/assets
+      - foreman_webpack:/home/foreman/public/webpack
+      - ${PLUGINS_PATH:-../foreman-plugins}:/home/foreman/plugins/external:cached
+      - ./bundler.d:/home/foreman/bundler.d/local:ro
+      - foreman_vendor:/home/foreman/vendor
+      - ./config/katello.yaml:/home/foreman/config/settings.plugins.d/katello.yaml:ro
+    stdin_open: true
+    tty: true
+
+  orchestrator:
+    image: foreman-dev:${FOREMAN_VERSION:-3.16-stable}
+    command: bundle exec sidekiq -c 1 -q dynflow_orchestrator
+    depends_on: *foreman-depends
+    environment: *foreman-env
+    volumes: *foreman-volumes
+
+  worker:
+    image: foreman-dev:${FOREMAN_VERSION:-3.16-stable}
+    command: bundle exec sidekiq -c 5 -q default,remote_execution
+    depends_on: *foreman-depends
+    environment: *foreman-env
+    volumes: *foreman-volumes
+
+  # KATELLO SERVICES (--profile katello)
+
+  candlepin:
+    image: quay.io/candlepin/candlepin:${CANDLEPIN_VERSION:-latest}
+    profiles: ["katello"]
+    hostname: candlepin.local
+    user: root
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8443:8443"
+      - "8080:8080"
+    environment:
+      CATALINA_OPTS: "-Djava.util.logging.config.file=/etc/candlepin/logging.properties"
+    # fix /var/lib/candlepin ownership then drop to tomcat user
+    entrypoint: ["/entrypoint.sh"]
+    volumes:
+      - candlepin_data:/var/lib/candlepin
+      - ./config/candlepin/candlepin.conf:/etc/candlepin/candlepin.conf:ro
+      - ./config/candlepin/logging.properties:/etc/candlepin/logging.properties:ro
+      - ./config/candlepin/certs:/etc/candlepin/certs:ro
+      - ./scripts/candlepin-entrypoint.sh:/entrypoint.sh:ro
+
+  pulp-api:
+    image: pulp/pulp:${PULP_VERSION:-3.63}
+    profiles: ["katello"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: pulpcore-api
+    ports:
+      - "24817:24817"
+    environment: &pulp-env
+      PULP_SETTINGS: /etc/pulp/settings.py
+      PULP_DATABASES__default__ENGINE: django.db.backends.postgresql
+      PULP_DATABASES__default__NAME: pulp
+      PULP_DATABASES__default__USER: foreman
+      PULP_DATABASES__default__PASSWORD: foreman
+      PULP_DATABASES__default__HOST: db
+      PULP_DATABASES__default__PORT: 5432
+      PULP_REDIS_HOST: redis
+      PULP_REDIS_PORT: 6379
+      PULP_CONTENT_ORIGIN: http://localhost:24816
+    volumes: &pulp-volumes
+      - pulp_data:/var/lib/pulp
+      - ./config/pulp-settings.py:/etc/pulp/settings.py:ro
+      - ./config/pulp-certs:/etc/pulp/certs:ro
+
+  pulp-content:
+    image: pulp/pulp:${PULP_VERSION:-3.63}
+    profiles: ["katello"]
+    depends_on:
+      - pulp-api
+    command: pulpcore-content
+    ports:
+      - "24816:24816"
+    environment: *pulp-env
+    volumes: *pulp-volumes
+
+  pulp-worker:
+    image: pulp/pulp:${PULP_VERSION:-3.63}
+    profiles: ["katello"]
+    depends_on:
+      - pulp-api
+    command: pulpcore-worker
+    environment: *pulp-env
+    volumes: *pulp-volumes
+
+  # TEST HOSTS (--profile testhosts)
+
+  testhost1:
+    build:
+      context: .
+      dockerfile: Dockerfile.testhost
+    profiles: ["testhosts"]
+    hostname: testhost1.local
+    ports:
+      - "2201:22"
+    depends_on:
+      - foreman
+    environment:
+      TESTHOST_HOSTNAME: testhost1.local
+      FOREMAN_URL: http://foreman:3000
+      REGISTER_WITH_FOREMAN: "1"
+    networks:
+      default:
+        aliases:
+          - testhost1.local
+
+  testhost2:
+    build:
+      context: .
+      dockerfile: Dockerfile.testhost
+    profiles: ["testhosts"]
+    hostname: testhost2.local
+    ports:
+      - "2202:22"
+    depends_on:
+      - foreman
+    environment:
+      TESTHOST_HOSTNAME: testhost2.local
+      FOREMAN_URL: http://foreman:3000
+      REGISTER_WITH_FOREMAN: "1"
+    networks:
+      default:
+        aliases:
+          - testhost2.local
+
+  testhost3:
+    build:
+      context: .
+      dockerfile: Dockerfile.testhost
+    profiles: ["testhosts"]
+    hostname: testhost3.local
+    ports:
+      - "2203:22"
+    depends_on:
+      - foreman
+    environment:
+      TESTHOST_HOSTNAME: testhost3.local
+      FOREMAN_URL: http://foreman:3000
+      REGISTER_WITH_FOREMAN: "1"
+    networks:
+      default:
+        aliases:
+          - testhost3.local
+
+volumes:
+  postgres_data:
+  redis_data:
+  foreman_data:
+  foreman_webpack:
+  foreman_vendor:
+  candlepin_data:
+  pulp_data:
