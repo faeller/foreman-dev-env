@@ -2,4 +2,7 @@
 md_docs/
 config/candlepin/certs/
 config/pulp-certs/
+foreman-plugins/*
+!foreman-plugins/.gitkeep
+bundler.d/*.local.rb
 *.log
