@@ -3,8 +3,9 @@
 ARG FOREMAN_VERSION=3.16-stable
 FROM quay.io/foreman/foreman:${FOREMAN_VERSION}
 
-# copy plugin gemfile links (bundler.d files)
-COPY bundler.d/*.local.rb /home/foreman/bundler.d/
+# copy plugin gemfile links (bundler.d files) - use shell to handle empty glob
+COPY bundler.d/ /tmp/bundler.d/
+RUN cp /tmp/bundler.d/*.local.rb /home/foreman/bundler.d/ 2>/dev/null || true
 
 # install terser for asset compilation (needed for plugins)
 USER root

@@ -1,6 +1,5 @@
-# foreman from source - supports both dev and production modes
-# builds from git repo with full asset pipeline support
-ARG FOREMAN_VERSION=develop
+# foreman from source - development mode with full asset pipeline
+ARG FOREMAN_VERSION=3.16-stable
 ARG RUBY_VERSION=3.1
 FROM rockylinux:9
 
@@ -44,15 +43,24 @@ RUN bundle config set --local with 'development' && \
 
 RUN npm install
 
+# create webpack output directory (for volume mount)
+RUN mkdir -p /home/foreman/public/webpack
+
 # create plugin directories and add local bundler.d loader
-RUN mkdir -p /home/foreman/plugins /home/foreman/bundler.d/local && \
+RUN mkdir -p /home/foreman/plugins/external /home/foreman/bundler.d/local && \
     echo 'Dir["/home/foreman/bundler.d/local/*.rb"].each { |f| instance_eval(Bundler.read_file(f)) }' > /home/foreman/bundler.d/local_loader.rb
+
+# entrypoint handles db migrations, seed on first run
+COPY --chown=foreman:foreman scripts/foreman-entrypoint.sh /entrypoint.sh
+USER root
+RUN chmod +x /entrypoint.sh
+USER foreman
 
 EXPOSE 3000
 
-# default to dev mode
 ENV RAILS_ENV=development \
     RAILS_LOG_TO_STDOUT=true \
     DATABASE_URL=postgres://foreman:foreman@db:5432/foreman
 
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["bundle", "exec", "rails", "server", "-b", "0.0.0.0"]

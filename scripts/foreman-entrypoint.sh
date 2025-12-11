@@ -26,9 +26,11 @@ if [ ! -f /tmp/.foreman-initialized ]; then
     echo "[entrypoint] seeding database..."
     SEED_ADMIN_PASSWORD="${SEED_ADMIN_PASSWORD:-changeme}" bundle exec rake db:seed
 
+    # compile webpack if not present
     if [ ! -f public/webpack/manifest.json ]; then
-        echo "[entrypoint] compiling webpack..."
-        bundle exec rake webpack:compile
+        echo "[entrypoint] compiling webpack (first run, takes ~1 min)..."
+        mkdir -p public/webpack
+        NODE_ENV=development ./node_modules/.bin/webpack --config config/webpack.config.js
     fi
 
     touch /tmp/.foreman-initialized

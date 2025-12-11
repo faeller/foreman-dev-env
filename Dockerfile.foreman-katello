@@ -51,7 +51,11 @@ RUN bundle config set --local with 'development' && \
 
 RUN npm install
 
-RUN bundle exec rake webpack:compile
+# create webpack output directory (for volume mount)
+RUN mkdir -p /home/foreman/public/webpack
+
+# compile webpack directly (skip rake to avoid Rails db loading)
+RUN NODE_ENV=production ./node_modules/.bin/webpack --config config/webpack.config.js
 
 # plugin loader for additional plugins
 RUN mkdir -p /home/foreman/bundler.d/local && \

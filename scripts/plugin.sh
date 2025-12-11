@@ -5,8 +5,17 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEV_ENV_DIR="$(dirname "$SCRIPT_DIR")"
-PLUGINS_PATH="${PLUGINS_PATH:-$(dirname "$DEV_ENV_DIR")/foreman-plugins}"
+PLUGINS_PATH="${PLUGINS_PATH:-$DEV_ENV_DIR/foreman-plugins}"
 BUNDLER_DIR="$DEV_ENV_DIR/bundler.d"
+
+cd "$DEV_ENV_DIR"
+
+# load and export .env (override any stale shell vars)
+if [ -f .env ]; then
+    unset RAILS_ENV FOREMAN_DOCKERFILE FOREMAN_VERSION
+    source .env
+    export RAILS_ENV FOREMAN_DOCKERFILE FOREMAN_VERSION
+fi
 
 usage() {
     echo "usage: $0 <command> [args]"
@@ -14,8 +23,10 @@ usage() {
     echo "commands:"
     echo "  status            show plugins dir and discovered plugins"
     echo "  sync              scan plugins dir and update bundler.d"
-    echo "  add <path>        symlink plugin into plugins dir"
+    echo "  install           sync + bundle install + restart (all in one)"
+    echo "  add <path>        symlink plugin into plugins dir and install"
     echo "  rm <name>         remove plugin from bundler.d"
+    echo "  restart           restart foreman services"
     echo ""
     echo "plugins dir: $PLUGINS_PATH"
 }
@@ -76,6 +87,26 @@ sync_plugins() {
     [ $count -gt 0 ] && echo "restart foreman to load"
 }
 
+restart_foreman() {
+    echo "restarting foreman services..."
+    env -u RAILS_ENV -u FOREMAN_DOCKERFILE docker compose restart foreman orchestrator worker
+    echo "done"
+}
+
+install_plugins() {
+    sync_plugins
+
+    if ls "$BUNDLER_DIR"/*.local.rb 1>/dev/null 2>&1; then
+        echo ""
+        echo "installing plugin dependencies..."
+        env -u RAILS_ENV -u FOREMAN_DOCKERFILE docker compose run --rm foreman bundle install
+        echo ""
+        restart_foreman
+    else
+        echo "no plugins to install"
+    fi
+}
+
 add_plugin() {
     local path="$1"
     [ -z "$path" ] && { echo "usage: $0 add <path>"; exit 1; }
@@ -92,7 +123,7 @@ add_plugin() {
 
     ln -s "$(realpath "$path")" "$target"
     echo "linked $plugin_name"
-    sync_plugins
+    install_plugins
 }
 
 remove_plugin() {
@@ -109,8 +140,10 @@ remove_plugin() {
 case "${1:-}" in
     status|st|ls|list|"") show_status ;;
     sync) sync_plugins ;;
+    install|i) install_plugins ;;
     add) add_plugin "$2" ;;
     rm|remove) remove_plugin "$2" ;;
+    restart|r) restart_foreman ;;
     -h|--help|help) usage ;;
     *) echo "unknown: $1"; usage; exit 1 ;;
 esac
