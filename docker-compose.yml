@@ -1,9 +1,10 @@
 # foreman dev environment
 # usage:
-#   ./scripts/setup.sh                    # production mode (official images)
-#   ./scripts/setup.sh --source           # development mode (from git)
-#   docker compose --profile katello up   # with katello
-#   docker compose --profile testhosts up # with test hosts
+#   ./scripts/setup.sh                    # development mode from source (default)
+#   ./scripts/setup.sh -k                 # with katello
+#   ./scripts/setup.sh --production       # use official images
+#   ./scripts/start.sh                    # start foreman
+#   ./scripts/start-katello.sh            # start with katello
 
 x-foreman-env: &foreman-env
   RAILS_ENV: ${RAILS_ENV:-production}
@@ -14,10 +15,11 @@ x-foreman-env: &foreman-env
   FOREMAN_RAILS_CACHE_STORE_URLS: redis://redis:6379/0
   DYNFLOW_REDIS_URL: redis://redis:6379/1
   SECRET_KEY_BASE: ${SECRET_KEY_BASE:-changeme_in_production}
+  RAILS_DEVELOPMENT_HOSTS: foreman,localhost
 
 x-foreman-volumes: &foreman-volumes
   - foreman_data:/home/foreman/public/assets
-  - ${PLUGINS_PATH:-../foreman-plugins}:/home/foreman/plugins/external:cached
+  - ${PLUGINS_PATH:-./foreman-plugins}:/home/foreman/plugins/external:cached
   - ./bundler.d:/home/foreman/bundler.d/local:ro
   - foreman_vendor:/home/foreman/vendor
 
@@ -74,7 +76,7 @@ services:
     volumes:
       - foreman_data:/home/foreman/public/assets
       - foreman_webpack:/home/foreman/public/webpack
-      - ${PLUGINS_PATH:-../foreman-plugins}:/home/foreman/plugins/external:cached
+      - ${PLUGINS_PATH:-./foreman-plugins}:/home/foreman/plugins/external:cached
       - ./bundler.d:/home/foreman/bundler.d/local:ro
       - foreman_vendor:/home/foreman/vendor
       - ./config/katello.yaml:/home/foreman/config/settings.plugins.d/katello.yaml:ro
@@ -224,6 +226,25 @@ services:
       default:
         aliases:
           - testhost3.local
+
+  testhost-debian:
+    build:
+      context: .
+      dockerfile: Dockerfile.testhost-debian
+    profiles: ["testhosts"]
+    hostname: testhost-debian.local
+    ports:
+      - "2204:22"
+    depends_on:
+      - foreman
+    environment:
+      TESTHOST_HOSTNAME: testhost-debian.local
+      FOREMAN_URL: http://foreman:3000
+      REGISTER_WITH_FOREMAN: "1"
+    networks:
+      default:
+        aliases:
+          - testhost-debian.local
 
 volumes:
   postgres_data:
